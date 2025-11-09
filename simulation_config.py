@@ -1,4 +1,4 @@
-"""Configuration objects and enumerations for the iGame simulation launcher."""
+"""Configuration objects and enumerations for the pygame simulation launcher."""
 from __future__ import annotations
 
 from dataclasses import dataclass
