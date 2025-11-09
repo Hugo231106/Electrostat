@@ -35,39 +35,50 @@ class MainMenu:
         self.config = config
         self.font = pygame.font.Font(None, 28)
         self.small_font = pygame.font.Font(None, 22)
-        self.title_font = pygame.font.Font(None, 52)
+        self.title_font = pygame.font.Font(None, 56)
         self.clock = pygame.time.Clock()
 
         self.dimension_buttons: List[MenuButton] = []
         self.field_buttons: List[MenuButton] = []
         self.action_buttons: List[MenuButton] = []
 
+        width, height = self.screen.get_size()
+        container_width = min(780, width - 120)
+        container_height = 420
+        self.container_rect = pygame.Rect(
+            (width - container_width) // 2,
+            120,
+            container_width,
+            container_height,
+        )
+
         self._build_buttons()
 
         self._start_requested = False
 
     def _build_buttons(self) -> None:
-        width, height = self.screen.get_size()
-        center_x = width // 2
+        column_spacing = 32
+        button_spacing = 18
+        button_height = 58
+        column_width = (self.container_rect.width - column_spacing * 3) // 2
 
-        button_width = 260
-        button_height = 56
-        button_spacing = 16
+        left_column_x = self.container_rect.left + column_spacing
+        right_column_x = left_column_x + column_width + column_spacing
+        buttons_top = self.container_rect.top + 140
 
-        # Dimension buttons
-        top_y = height // 2 - 150
+        # Dimension buttons (left column)
         for index, dimension in enumerate((DimensionMode.MODE_2D, DimensionMode.MODE_3D)):
             rect = pygame.Rect(
-                center_x - button_width // 2,
-                top_y + index * (button_height + button_spacing),
-                button_width,
+                left_column_x,
+                buttons_top + index * (button_height + button_spacing),
+                column_width,
                 button_height,
             )
-            button = MenuButton(dimension.label(), rect, "dimension", value=dimension)
-            self.dimension_buttons.append(button)
+            self.dimension_buttons.append(
+                MenuButton(dimension.label(), rect, "dimension", value=dimension)
+            )
 
-        # Field type buttons
-        top_y += 170
+        # Field type buttons (right column)
         field_types = [
             FieldType.ELECTROSTATIC,
             FieldType.MAGNETOSTATIC,
@@ -75,22 +86,22 @@ class MainMenu:
         ]
         for index, field_type in enumerate(field_types):
             rect = pygame.Rect(
-                center_x - button_width // 2,
-                top_y + index * (button_height + button_spacing),
-                button_width,
+                right_column_x,
+                buttons_top + index * (button_height + button_spacing),
+                column_width,
                 button_height,
             )
-            button = MenuButton(field_type.label(), rect, "field", value=field_type)
-            self.field_buttons.append(button)
+            self.field_buttons.append(MenuButton(field_type.label(), rect, "field", value=field_type))
 
-        # Validate button
+        # Validate button centered at bottom of container
+        validate_width = column_width
         validate_rect = pygame.Rect(
-            center_x - button_width // 2,
-            height - 120,
-            button_width,
+            self.container_rect.centerx - validate_width // 2,
+            self.container_rect.bottom - button_height - 36,
+            validate_width,
             button_height,
         )
-        self.action_buttons.append(MenuButton("Valider", validate_rect, "validate"))
+        self.action_buttons.append(MenuButton("Lancer la simulation", validate_rect, "validate"))
 
         self._refresh_selections()
 
@@ -109,10 +120,15 @@ class MainMenu:
     def _draw_button(self, button: MenuButton, mouse_pos: Any) -> None:
         hovered = button.rect.collidepoint(mouse_pos)
         color = self.BTN_COLOR
-        if hovered:
-            color = self.BTN_COLOR_HOVER
-        if button.is_selected:
-            color = self.BTN_COLOR_SELECTED
+        if button.group == "validate":
+            color = (140, 100, 220)
+            if hovered:
+                color = (160, 120, 240)
+        else:
+            if hovered:
+                color = self.BTN_COLOR_HOVER
+            if button.is_selected:
+                color = self.BTN_COLOR_SELECTED
 
         pygame.draw.rect(self.screen, color, button.rect, border_radius=12)
         label_surface = self.font.render(button.label, True, self.TEXT_COLOR)
@@ -125,31 +141,48 @@ class MainMenu:
         self.screen.fill(self.BG_COLOR)
         mouse_pos = pygame.mouse.get_pos()
 
+        # Background accents
+        overlay_rect = self.container_rect.inflate(80, 60)
+        pygame.draw.rect(self.screen, (24, 24, 32), overlay_rect, border_radius=24)
+        pygame.draw.rect(self.screen, (36, 36, 52), self.container_rect, border_radius=24)
+
         title_surface = self.title_font.render("Electrostat Sim", True, self.TEXT_COLOR)
-        title_rect = title_surface.get_rect(center=(self.screen.get_width() // 2, 80))
+        title_rect = title_surface.get_rect(midtop=(self.screen.get_width() // 2, 48))
         self.screen.blit(title_surface, title_rect)
 
         subtitle_surface = self.small_font.render(
-            "Choisissez le mode et la simulation à lancer", True, self.SUBTITLE_COLOR
+            "Choisissez le mode et configurez votre simulation", True, self.SUBTITLE_COLOR
         )
-        subtitle_rect = subtitle_surface.get_rect(center=(self.screen.get_width() // 2, 120))
+        subtitle_rect = subtitle_surface.get_rect(midtop=(self.screen.get_width() // 2, 104))
         self.screen.blit(subtitle_surface, subtitle_rect)
 
-        group_titles = [
-            ("Mode de rendu", self.dimension_buttons[0].rect.top - 40),
-            ("Type de simulation", self.field_buttons[0].rect.top - 40),
-        ]
-        for text, y in group_titles:
-            label_surface = self.small_font.render(text, True, self.SUBTITLE_COLOR)
-            label_rect = label_surface.get_rect(center=(self.screen.get_width() // 2, y))
-            self.screen.blit(label_surface, label_rect)
+        # Section headers inside the container
+        dimension_header = self.small_font.render("Mode de rendu", True, self.SUBTITLE_COLOR)
+        dimension_pos = (self.dimension_buttons[0].rect.left, self.container_rect.top + 96)
+        self.screen.blit(dimension_header, dimension_pos)
 
+        field_header = self.small_font.render("Type de simulation", True, self.SUBTITLE_COLOR)
+        self.screen.blit(field_header, (self.field_buttons[0].rect.left, self.container_rect.top + 96))
+
+        # Draw buttons
         for button in self.dimension_buttons + self.field_buttons + self.action_buttons:
             self._draw_button(button, mouse_pos)
 
-        summary_surface = self.small_font.render(self.config.describe(), True, self.TEXT_COLOR)
-        summary_rect = summary_surface.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() - 60))
-        self.screen.blit(summary_surface, summary_rect)
+        # Summary chips at bottom of container
+        summary_texts = [
+            f"Mode : {self.config.dimension.label()}",
+            f"Simulation : {self.config.field_type.label()}",
+        ]
+        chip_y = self.container_rect.bottom - 140
+        chip_x = self.container_rect.left + 40
+        for text in summary_texts:
+            surface = self.small_font.render(text, True, self.TEXT_COLOR)
+            padding = pygame.Vector2(18, 10)
+            rect = surface.get_rect(topleft=(chip_x, chip_y))
+            rect.inflate_ip(padding.x, padding.y)
+            pygame.draw.rect(self.screen, (64, 64, 92), rect, border_radius=12)
+            self.screen.blit(surface, surface.get_rect(center=rect.center))
+            chip_x = rect.right + 16
 
     def handle_event(self, event: pygame.event.Event) -> None:
         """React to user inputs and update the configuration accordingly."""
