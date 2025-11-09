@@ -70,10 +70,14 @@ class Scene2D(BaseScene):
         self.field_lines_E: List[List[Tuple[float, float]]] = []
         self.field_lines_B: List[List[Tuple[float, float]]] = []
         self.potential_contours: List[List[Tuple[float, float]]] = []
+        self.manual_field_line_seeds_E: List[Tuple[float, float]] = []
+        self.manual_field_line_seeds_B: List[Tuple[float, float]] = []
+        self.manual_potential_seeds: List[Tuple[float, float]] = []
         self.field_dirty = True
 
         self.field_toggle_rect = pygame.Rect(0, 0, 0, 0)
         self.potential_toggle_rect = pygame.Rect(0, 0, 0, 0)
+        self.clear_visuals_rect = pygame.Rect(0, 0, 0, 0)
 
         # Drag and interaction state for left-click selection / movement
         self.drag_candidate: Optional[Tuple[str, int]] = None
@@ -211,6 +215,10 @@ class Scene2D(BaseScene):
             self.field_dirty = True
             return
 
+        if self.clear_visuals_rect.collidepoint((x, y)):
+            self._clear_manual_field_visuals()
+            return
+
     def on_resize(self, size: tuple[int, int]) -> None:
         width, height = size
         panel_width = min(self.panel_width, max(220, width - 240)) if width > 480 else min(self.panel_width, width)
@@ -310,6 +318,9 @@ class Scene2D(BaseScene):
     def _handle_workspace_click_world(self, world_pos: Tuple[float, float]) -> None:
         """Perform the workspace action associated with a simple click in the void."""
 
+        if self._handle_field_visual_click(world_pos):
+            return
+
         if self.selected_type == "point":
             self._place_point_charge(world_pos)
         elif self.selected_type in {"line", "current"}:
@@ -365,6 +376,32 @@ class Scene2D(BaseScene):
             index = 0
         self.show_field_lines_mode = modes[(index + 1) % len(modes)]
         self.field_dirty = True
+
+    def _handle_field_visual_click(self, world_pos: Tuple[float, float]) -> bool:
+        handled = False
+        seed = (world_pos[0], world_pos[1])
+
+        if self.show_field_lines_mode in {"E", "both"}:
+            self.manual_field_line_seeds_E.append(seed)
+            handled = True
+
+        if self.show_field_lines_mode in {"B", "both"}:
+            self.manual_field_line_seeds_B.append(seed)
+            handled = True
+
+        if self.show_potentials and self.config.field_type != FieldType.MAGNETOSTATIC:
+            self.manual_potential_seeds.append(seed)
+            handled = True
+
+        if handled:
+            self.selected_object = None
+            self.pending_start = None
+            self.input_active = False
+            self.selected_input_active = False
+            self._populate_selected_input()
+            self._mark_field_dirty()
+
+        return handled
 
     def _parse_value(self) -> float:
         try:
@@ -704,56 +741,42 @@ class Scene2D(BaseScene):
         if self.currents:
             self.field_vectors_B, self.max_vector_magnitude_B = self._sample_field_vectors(bounds, "B")
 
-        if self.show_field_lines_mode in {"E", "both"} and self.charges:
+        if (
+            self.show_field_lines_mode in {"E", "both"}
+            and self.manual_field_line_seeds_E
+            and (self.charges or self.line_charges)
+        ):
             self.field_lines_E = self._generate_e_field_lines(bounds)
-        if self.show_field_lines_mode in {"B", "both"} and self.currents:
+        if (
+            self.show_field_lines_mode in {"B", "both"}
+            and self.manual_field_line_seeds_B
+            and self.currents
+        ):
             self.field_lines_B = self._generate_b_field_lines(bounds)
-        if self.show_potentials and self.config.field_type != FieldType.MAGNETOSTATIC:
+        if (
+            self.show_potentials
+            and self.manual_potential_seeds
+            and self.config.field_type != FieldType.MAGNETOSTATIC
+        ):
             self.potential_contours = self._generate_potential_contours(bounds)
         self.field_dirty = False
 
     def _generate_e_field_lines(self, bounds: Tuple[float, float, float, float]) -> List[List[Tuple[float, float]]]:
         lines: List[List[Tuple[float, float]]] = []
-        seed_radius = self._charge_radius_world() * 1.4
-        seeds_per_charge = 12
         field_func = lambda p: compute_E_at_point(p, self.charges, self.line_charges)
-        for charge in self.charges:
-            for i in range(seeds_per_charge):
-                angle = 2 * math.pi * i / seeds_per_charge
-                start = (charge.x + math.cos(angle) * seed_radius, charge.y + math.sin(angle) * seed_radius)
-                if not (bounds[0] <= start[0] <= bounds[2] and bounds[1] <= start[1] <= bounds[3]):
-                    continue
-                for direction in (1, -1):
-                    line = self._trace_field_line(start, field_func, bounds, avoid="E", direction=direction)
-                    if len(line) > 1:
-                        lines.append(line)
+        for seed in self.manual_field_line_seeds_E:
+            line = self._build_bidirectional_field_line(seed, field_func, bounds, avoid="E")
+            if len(line) > 1:
+                lines.append(line)
         return lines
 
     def _generate_b_field_lines(self, bounds: Tuple[float, float, float, float]) -> List[List[Tuple[float, float]]]:
         lines: List[List[Tuple[float, float]]] = []
         field_func = lambda p: compute_B_at_point(p, self.currents)
-        for wire in self.currents:
-            dx = wire.x2 - wire.x1
-            dy = wire.y2 - wire.y1
-            length = math.hypot(dx, dy)
-            segments = max(4, int(length / max(self._field_line_step_world(), 1.0)))
-            if segments <= 0:
-                continue
-            direction_vec = self._normalize_vector((dx, dy))
-            normal = self._normalize_vector((-direction_vec[1], direction_vec[0]))
-            if normal == (0.0, 0.0):
-                normal = (0.0, 1.0)
-            offset = self._line_selection_threshold_world() * 0.8
-            for i in range(segments):
-                t = (i + 0.5) / segments
-                base = (wire.x1 + dx * t, wire.y1 + dy * t)
-                for sign in (1, -1):
-                    start = (base[0] + normal[0] * offset * sign, base[1] + normal[1] * offset * sign)
-                    if not (bounds[0] <= start[0] <= bounds[2] and bounds[1] <= start[1] <= bounds[3]):
-                        continue
-                    line = self._trace_field_line(start, field_func, bounds, avoid="B", direction=sign)
-                    if len(line) > 1:
-                        lines.append(line)
+        for seed in self.manual_field_line_seeds_B:
+            line = self._build_bidirectional_field_line(seed, field_func, bounds, avoid="B")
+            if len(line) > 1:
+                lines.append(line)
         return lines
 
     def _sample_field_vectors(
@@ -815,9 +838,43 @@ class Scene2D(BaseScene):
         max_v = max(flat_values)
         if math.isclose(min_v, max_v, rel_tol=1e-6, abs_tol=1e-6):
             return []
-        num_levels = 7
-        levels = [min_v + (i + 1) * (max_v - min_v) / (num_levels + 1) for i in range(num_levels)]
-        return marching_squares(xs, ys, values, levels)
+
+        desired_levels: List[float] = []
+        for seed in self.manual_potential_seeds:
+            level = compute_potential_at_point(seed, self.charges, self.line_charges)
+            if not any(abs(level - existing) < 1e-6 for existing in desired_levels):
+                desired_levels.append(level)
+
+        if not desired_levels:
+            return []
+
+        filtered_levels = [
+            level for level in desired_levels if min_v < level < max_v
+        ]
+        if not filtered_levels:
+            return []
+
+        return marching_squares(xs, ys, values, filtered_levels)
+
+    def _build_bidirectional_field_line(
+        self,
+        seed: Tuple[float, float],
+        field_func: Callable[[Tuple[float, float]], Tuple[float, float]],
+        bounds: Tuple[float, float, float, float],
+        avoid: str,
+    ) -> List[Tuple[float, float]]:
+        forward = self._trace_field_line(seed, field_func, bounds, avoid=avoid, direction=1)
+        backward = self._trace_field_line(seed, field_func, bounds, avoid=avoid, direction=-1)
+        if not forward and not backward:
+            return []
+        points: List[Tuple[float, float]] = []
+        if backward:
+            reversed_back = list(reversed(backward))
+            if reversed_back:
+                reversed_back = reversed_back[:-1]
+            points.extend(reversed_back)
+        points.extend(forward)
+        return points
 
     def _trace_field_line(
         self,
@@ -994,6 +1051,28 @@ class Scene2D(BaseScene):
             self.show_potentials,
         )
         y_cursor = self.potential_toggle_rect.bottom + 32
+
+        self.clear_visuals_rect = pygame.Rect(
+            self.panel_rect.left + 16,
+            y_cursor,
+            self.panel_rect.width - 32,
+            44,
+        )
+        has_visuals = (
+            self.manual_field_line_seeds_E
+            or self.manual_field_line_seeds_B
+            or self.manual_potential_seeds
+        )
+        base_clear = (150, 70, 80) if has_visuals else (70, 60, 70)
+        if self.clear_visuals_rect.collidepoint(pygame.mouse.get_pos()) and has_visuals:
+            clear_color = tuple(min(255, c + 20) for c in base_clear)
+        else:
+            clear_color = base_clear
+        pygame.draw.rect(self.screen, clear_color, self.clear_visuals_rect, border_radius=8)
+        label_color = (255, 235, 240) if has_visuals else (200, 195, 205)
+        clear_label = self.small_font.render("Tout supprimer", True, label_color)
+        self.screen.blit(clear_label, clear_label.get_rect(center=self.clear_visuals_rect.center))
+        y_cursor = self.clear_visuals_rect.bottom + 24
 
         instructions = [
             "Clic gauche : sélectionner / déplacer / créer",
@@ -1283,6 +1362,21 @@ class Scene2D(BaseScene):
         if kind == "current" and 0 <= index < len(self.currents):
             return self.currents[index]
         return None
+
+    def _clear_manual_field_visuals(self) -> None:
+        if not (
+            self.manual_field_line_seeds_E
+            or self.manual_field_line_seeds_B
+            or self.manual_potential_seeds
+        ):
+            return
+        self.manual_field_line_seeds_E.clear()
+        self.manual_field_line_seeds_B.clear()
+        self.manual_potential_seeds.clear()
+        self.field_lines_E = []
+        self.field_lines_B = []
+        self.potential_contours = []
+        self._mark_field_dirty()
 
     def _mark_field_dirty(self) -> None:
         self.field_dirty = True
