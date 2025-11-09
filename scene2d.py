@@ -538,7 +538,7 @@ class Scene2D(BaseScene):
 
         if self.show_field_lines_mode in {"E", "both"}:
             color = (255, 220, 160)
-            width = max(1, int(2 * self.camera.zoom))
+            width = max(1, int(1.2 * self.camera.zoom))
             for line in self.field_lines_E:
                 if len(line) < 2:
                     continue
@@ -547,7 +547,7 @@ class Scene2D(BaseScene):
 
         if self.show_field_lines_mode in {"B", "both"}:
             color = (140, 230, 255)
-            width = max(1, int(2 * self.camera.zoom))
+            width = max(1, int(1.2 * self.camera.zoom))
             for line in self.field_lines_B:
                 if len(line) < 2:
                     continue
@@ -566,7 +566,7 @@ class Scene2D(BaseScene):
     def _draw_vector_field_samples(self) -> None:
         arrow_min = 10.0
         arrow_max = 48.0
-        width = max(1, int(self.camera.zoom * 1.6))
+        width = max(1, int(self.camera.zoom * 1.2))
 
         if self.field_vectors_E and self.max_vector_magnitude_E > 1e-6:
             scale = arrow_max / self.max_vector_magnitude_E
@@ -1150,7 +1150,7 @@ class Scene2D(BaseScene):
 
     def _draw_line_charge(self, line: LineCharge, selected: bool) -> None:
         color = (240, 200, 80)
-        width = max(1, int((4 if selected else 3) * self.camera.zoom))
+        width = max(1, int((3 if selected else 2) * self.camera.zoom))
         start_screen = self._round_point(self._world_to_screen(line.start))
         end_screen = self._round_point(self._world_to_screen(line.end))
         if selected:
@@ -1167,7 +1167,7 @@ class Scene2D(BaseScene):
 
     def _draw_current_wire(self, wire: CurrentWire, selected: bool) -> None:
         color = (120, 230, 120)
-        width = max(1, int((4 if selected else 3) * self.camera.zoom))
+        width = max(1, int((3 if selected else 2) * self.camera.zoom))
         start_screen = self._round_point(self._world_to_screen(wire.start))
         end_screen = self._round_point(self._world_to_screen(wire.end))
         if selected:
@@ -1297,11 +1297,11 @@ class Scene2D(BaseScene):
 
     @staticmethod
     def _charge_radius_world() -> float:
-        return 20.0
+        return 12.0
 
     @staticmethod
     def _line_selection_threshold_world() -> float:
-        return 14.0
+        return 10.0
 
     @staticmethod
     def _normalize_vector(vec: Tuple[float, float]) -> Tuple[float, float]:
