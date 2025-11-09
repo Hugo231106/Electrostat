@@ -1,10 +1,10 @@
-"""Main menu interface built with the iGame library."""
+"""Main menu interface built with the pygame library."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, List
 
-import igame
+import pygame
 
 from simulation_config import DimensionMode, FieldType, SimulationConfig
 
@@ -30,13 +30,13 @@ class MainMenu:
     TEXT_COLOR = (235, 235, 245)
     SUBTITLE_COLOR = (160, 160, 190)
 
-    def __init__(self, screen: igame.Surface, config: SimulationConfig) -> None:
+    def __init__(self, screen: pygame.Surface, config: SimulationConfig) -> None:
         self.screen = screen
         self.config = config
-        self.font = igame.font.Font(None, 28)
-        self.small_font = igame.font.Font(None, 22)
-        self.title_font = igame.font.Font(None, 52)
-        self.clock = igame.time.Clock()
+        self.font = pygame.font.Font(None, 28)
+        self.small_font = pygame.font.Font(None, 22)
+        self.title_font = pygame.font.Font(None, 52)
+        self.clock = pygame.time.Clock()
 
         self.dimension_buttons: List[MenuButton] = []
         self.field_buttons: List[MenuButton] = []
@@ -57,7 +57,7 @@ class MainMenu:
         # Dimension buttons
         top_y = height // 2 - 150
         for index, dimension in enumerate((DimensionMode.MODE_2D, DimensionMode.MODE_3D)):
-            rect = igame.Rect(
+            rect = pygame.Rect(
                 center_x - button_width // 2,
                 top_y + index * (button_height + button_spacing),
                 button_width,
@@ -74,7 +74,7 @@ class MainMenu:
             FieldType.COUPLED,
         ]
         for index, field_type in enumerate(field_types):
-            rect = igame.Rect(
+            rect = pygame.Rect(
                 center_x - button_width // 2,
                 top_y + index * (button_height + button_spacing),
                 button_width,
@@ -84,7 +84,7 @@ class MainMenu:
             self.field_buttons.append(button)
 
         # Validate button
-        validate_rect = igame.Rect(
+        validate_rect = pygame.Rect(
             center_x - button_width // 2,
             height - 120,
             button_width,
@@ -114,7 +114,7 @@ class MainMenu:
         if button.is_selected:
             color = self.BTN_COLOR_SELECTED
 
-        igame.draw.rect(self.screen, color, button.rect, border_radius=12)
+        pygame.draw.rect(self.screen, color, button.rect, border_radius=12)
         label_surface = self.font.render(button.label, True, self.TEXT_COLOR)
         label_rect = label_surface.get_rect(center=button.rect.center)
         self.screen.blit(label_surface, label_rect)
@@ -123,7 +123,7 @@ class MainMenu:
         """Render the complete main menu on the screen."""
 
         self.screen.fill(self.BG_COLOR)
-        mouse_pos = igame.mouse.get_pos()
+        mouse_pos = pygame.mouse.get_pos()
 
         title_surface = self.title_font.render("Electrostat Sim", True, self.TEXT_COLOR)
         title_rect = title_surface.get_rect(center=(self.screen.get_width() // 2, 80))
@@ -151,10 +151,10 @@ class MainMenu:
         summary_rect = summary_surface.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() - 60))
         self.screen.blit(summary_surface, summary_rect)
 
-    def handle_event(self, event: igame.event.Event) -> None:
+    def handle_event(self, event: pygame.event.Event) -> None:
         """React to user inputs and update the configuration accordingly."""
 
-        if event.type == igame.MOUSEBUTTONDOWN and event.button == 1:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             mouse_pos = event.pos
             for button in self.dimension_buttons:
                 if button.rect.collidepoint(mouse_pos):
