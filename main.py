@@ -61,7 +61,7 @@ def run_simulation(screen: pygame.Surface, config: SimulationConfig) -> bool:
 
 def main() -> None:
     pygame.init()
-    screen = pygame.display.set_mode((960, 640))
+    screen = pygame.display.set_mode((960, 640), pygame.RESIZABLE)
     pygame.display.set_caption("Electrostat Launcher")
 
     config = SimulationConfig()
@@ -73,6 +73,11 @@ def main() -> None:
             if event.type == pygame.QUIT:
                 running = False
                 break
+            if event.type == pygame.VIDEORESIZE:
+                screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
+                menu.screen = screen
+                menu.on_resize(event.size)
+                continue
             menu.handle_event(event)
 
         if not running:
@@ -87,6 +92,9 @@ def main() -> None:
             if not continue_running:
                 running = False
             else:
+                screen = pygame.display.get_surface()
+                menu.screen = screen
+                menu.on_resize(screen.get_size())
                 menu.reset()
 
     pygame.quit()

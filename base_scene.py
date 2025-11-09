@@ -22,6 +22,10 @@ class BaseScene:
         if event.type == pygame.QUIT:
             self.running = False
             return False
+        if event.type == pygame.VIDEORESIZE:
+            self.screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
+            self.on_resize(event.size)
+            return True
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             self.running = False
         return True
@@ -31,6 +35,11 @@ class BaseScene:
 
     def draw(self) -> None:
         """Hook for subclasses to render their scene."""
+
+    def on_resize(self, size: tuple[int, int]) -> None:
+        """Called when the window size changes."""
+
+        del size
 
     def run(self) -> bool:
         """Main simulation loop. Returns False if the app should close."""
