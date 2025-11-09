@@ -42,21 +42,17 @@ class MainMenu:
         self.field_buttons: List[MenuButton] = []
         self.action_buttons: List[MenuButton] = []
 
-        width, height = self.screen.get_size()
-        container_width = min(780, width - 120)
-        container_height = 420
-        self.container_rect = pygame.Rect(
-            (width - container_width) // 2,
-            120,
-            container_width,
-            container_height,
-        )
+        self.container_rect = pygame.Rect(0, 0, 640, 420)
 
-        self._build_buttons()
+        self._rebuild_layout()
 
         self._start_requested = False
 
     def _build_buttons(self) -> None:
+        self.dimension_buttons.clear()
+        self.field_buttons.clear()
+        self.action_buttons.clear()
+
         column_spacing = 32
         button_spacing = 18
         button_height = 58
@@ -104,6 +100,28 @@ class MainMenu:
         self.action_buttons.append(MenuButton("Lancer la simulation", validate_rect, "validate"))
 
         self._refresh_selections()
+
+    def _rebuild_layout(self) -> None:
+        width, height = self.screen.get_size()
+        available_width = max(360, width - 120)
+        container_width = min(780, available_width)
+        available_height = max(320, height - 200)
+        container_height = min(480, available_height)
+
+        top_margin = max(60, (height - container_height) // 2)
+        self.container_rect = pygame.Rect(
+            (width - container_width) // 2,
+            top_margin,
+            container_width,
+            container_height,
+        )
+
+        self._build_buttons()
+
+    def on_resize(self, size: tuple[int, int]) -> None:
+        """Update layout when the main window is resized."""
+
+        self._rebuild_layout()
 
     def _refresh_selections(self) -> None:
         for button in self.dimension_buttons:

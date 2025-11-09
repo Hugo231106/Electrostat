@@ -72,6 +72,9 @@ class Scene2D(BaseScene):
         self.potential_contours: List[List[Tuple[float, float]]] = []
         self.field_dirty = True
 
+        self.field_toggle_rect = pygame.Rect(0, 0, 0, 0)
+        self.potential_toggle_rect = pygame.Rect(0, 0, 0, 0)
+
         # Drag and interaction state for left-click selection / movement
         self.drag_candidate: Optional[Tuple[str, int]] = None
         self.drag_initial_mouse: Optional[Tuple[int, int]] = None
@@ -108,6 +111,8 @@ class Scene2D(BaseScene):
         if not super().handle_event(event):
             return False
 
+        if event.type == pygame.VIDEORESIZE:
+            return True
         if event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
                 if self.panel_rect.collidepoint(event.pos):
@@ -196,6 +201,27 @@ class Scene2D(BaseScene):
         if delete_rect.collidepoint((x, y)) and self.selected_object is not None:
             self._delete_selected_object()
             return
+
+        if self.field_toggle_rect.collidepoint((x, y)):
+            self._cycle_field_line_mode()
+            return
+
+        if self.potential_toggle_rect.collidepoint((x, y)):
+            self.show_potentials = not self.show_potentials
+            self.field_dirty = True
+            return
+
+    def on_resize(self, size: tuple[int, int]) -> None:
+        width, height = size
+        panel_width = min(self.panel_width, max(220, width - 240)) if width > 480 else min(self.panel_width, width)
+        panel_width = max(200, panel_width)
+        panel_width = min(panel_width, width)
+        self.panel_rect = pygame.Rect(width - panel_width, 0, panel_width, height)
+        workspace_width = max(0, width - panel_width)
+        self.workspace_rect = pygame.Rect(0, 0, workspace_width, height)
+        self.field_toggle_rect = pygame.Rect(0, 0, 0, 0)
+        self.potential_toggle_rect = pygame.Rect(0, 0, 0, 0)
+        self.field_dirty = True
 
     def _start_workspace_left_click(self, position: Tuple[int, int]) -> None:
         """Handle the start of a left click inside the workspace area."""
@@ -538,9 +564,9 @@ class Scene2D(BaseScene):
                 pygame.draw.line(self.screen, color, start, end, 1)
 
     def _draw_vector_field_samples(self) -> None:
-        arrow_min = 6.0
-        arrow_max = 34.0
-        width = max(1, int(self.camera.zoom * 1.2))
+        arrow_min = 10.0
+        arrow_max = 48.0
+        width = max(1, int(self.camera.zoom * 1.6))
 
         if self.field_vectors_E and self.max_vector_magnitude_E > 1e-6:
             scale = arrow_max / self.max_vector_magnitude_E
@@ -585,7 +611,7 @@ class Scene2D(BaseScene):
             max(1, width),
         )
 
-        head_length = max(4.0, min(length * 0.4, 16.0 + self.camera.zoom * 1.5))
+        head_length = max(6.0, min(length * 0.45, 24.0 + self.camera.zoom * 1.8))
         perp = (-direction[1], direction[0])
         left = (
             end[0] - direction[0] * head_length + perp[0] * head_length * 0.5,
@@ -842,6 +868,18 @@ class Scene2D(BaseScene):
                 return True
         return False
 
+    def _draw_toggle_button(self, rect: pygame.Rect, label: str, active: bool) -> None:
+        hovered = rect.collidepoint(pygame.mouse.get_pos())
+        base_color = (86, 90, 124)
+        active_color = (130, 118, 212)
+        color = active_color if active else base_color
+        if hovered:
+            color = tuple(min(255, c + 18) for c in color)
+        pygame.draw.rect(self.screen, color, rect, border_radius=10)
+        text_surface = self.small_font.render(label, True, (240, 240, 248))
+        text_rect = text_surface.get_rect(center=rect.center)
+        self.screen.blit(text_surface, text_rect)
+
     def _draw_panel(self) -> None:
         title = self.font.render("Outils", True, (245, 245, 250))
         self.screen.blit(title, (self.panel_rect.left + 20, 24))
@@ -927,27 +965,42 @@ class Scene2D(BaseScene):
         pygame.draw.rect(self.screen, button_color, delete_rect, border_radius=8)
         delete_label = self.small_font.render("Supprimer sélection", True, (255, 235, 240))
         self.screen.blit(delete_label, delete_label.get_rect(center=delete_rect.center))
-        y_cursor = delete_rect.bottom + 28
+        y_cursor = delete_rect.bottom + 24
 
-        field_lines_label = self.small_font.render(
-            f"Lignes de champ : {self._field_mode_label()}", True, (210, 215, 230)
+        self.field_toggle_rect = pygame.Rect(
+            self.panel_rect.left + 16,
+            y_cursor,
+            self.panel_rect.width - 32,
+            48,
         )
-        self.screen.blit(field_lines_label, (self.panel_rect.left + 20, y_cursor))
-        y_cursor += 26
-        potentials_label = self.small_font.render(
-            f"Équipotentielles : {'activées' if self.show_potentials else 'désactivées'}",
-            True,
-            (210, 215, 230),
+        field_label = f"Lignes de champ : {self._field_mode_label()}"
+        self._draw_toggle_button(
+            self.field_toggle_rect,
+            field_label,
+            self.show_field_lines_mode != "none",
         )
-        self.screen.blit(potentials_label, (self.panel_rect.left + 20, y_cursor))
-        y_cursor += 32
+        y_cursor = self.field_toggle_rect.bottom + 14
+
+        self.potential_toggle_rect = pygame.Rect(
+            self.panel_rect.left + 16,
+            y_cursor,
+            self.panel_rect.width - 32,
+            48,
+        )
+        potential_label = f"Équipotentielles : {'activées' if self.show_potentials else 'désactivées'}"
+        self._draw_toggle_button(
+            self.potential_toggle_rect,
+            potential_label,
+            self.show_potentials,
+        )
+        y_cursor = self.potential_toggle_rect.bottom + 32
 
         instructions = [
             "Clic gauche : sélectionner / déplacer / créer",
             "Clic droit + glisser : déplacer la vue",
             "Molette : zoom",
-            "Touche L : cycle lignes de champ",
-            "Touche P : afficher équipotentielles",
+            "Bouton / Touche L : lignes de champ",
+            "Bouton / Touche P : équipotentielles",
             "Ctrl + D : dupliquer la sélection",
             "Suppr : supprimer la sélection",
             "[ / ] : densité des flèches du champ",
