@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import ClassVar, Tuple
 
 
 @dataclass
 class Camera2D:
     """Represent a 2D camera with translation and zoom."""
+
+    MIN_ZOOM: ClassVar[float] = 0.05
+    MAX_ZOOM: ClassVar[float] = 120.0
 
     offset_x: float = 0.0
     offset_y: float = 0.0
@@ -36,6 +39,6 @@ class Camera2D:
             return
         world_focus_x, world_focus_y = self.screen_to_world(focus_x, focus_y)
         self.zoom *= zoom_factor
-        self.zoom = max(0.05, min(self.zoom, 20.0))
+        self.zoom = max(self.MIN_ZOOM, min(self.zoom, self.MAX_ZOOM))
         self.offset_x = world_focus_x - focus_x / self.zoom
         self.offset_y = world_focus_y - focus_y / self.zoom
