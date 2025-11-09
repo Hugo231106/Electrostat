@@ -72,6 +72,22 @@ class Scene2D(BaseScene):
         self.potential_contours: List[List[Tuple[float, float]]] = []
         self.field_dirty = True
 
+        # Drag and interaction state for left-click selection / movement
+        self.drag_candidate: Optional[Tuple[str, int]] = None
+        self.drag_initial_mouse: Optional[Tuple[int, int]] = None
+        self.drag_start_world: Optional[Tuple[float, float]] = None
+        self.drag_initial_object_state: Optional[Tuple[float, ...]] = None
+        self.is_dragging_object = False
+        self.left_click_active = False
+        self.left_click_suppressed = False
+
+        # Cached vectors for the arrow-based field visualisation
+        self.vector_field_skip = 1
+        self.field_vectors_E: List[Tuple[Tuple[float, float], Tuple[float, float], float]] = []
+        self.field_vectors_B: List[Tuple[Tuple[float, float], Tuple[float, float], float]] = []
+        self.max_vector_magnitude_E = 0.0
+        self.max_vector_magnitude_B = 0.0
+
     def _build_type_options(self) -> Sequence[_TypeOption]:
         if self.config.field_type == FieldType.ELECTROSTATIC:
             return (
@@ -97,24 +113,31 @@ class Scene2D(BaseScene):
                 if self.panel_rect.collidepoint(event.pos):
                     self._handle_panel_click(event.pos)
                 elif self.workspace_rect.collidepoint(event.pos):
-                    self._handle_workspace_click(event.pos)
+                    self._start_workspace_left_click(event.pos)
             elif event.button == 3 and self.workspace_rect.collidepoint(event.pos):
                 self.is_panning = True
             elif event.button in (4, 5) and self.workspace_rect.collidepoint(event.pos):
                 self._handle_zoom(event.pos, 1.1 if event.button == 4 else 1 / 1.1)
         elif event.type == pygame.MOUSEBUTTONUP:
-            if event.button == 3:
+            if event.button == 1 and self.left_click_active:
+                self._finish_workspace_left_click(event.pos)
+            elif event.button == 3:
                 self.is_panning = False
-        elif event.type == pygame.MOUSEMOTION and self.is_panning:
-            dx, dy = event.rel
-            self.camera.offset_x -= dx / self.camera.zoom
-            self.camera.offset_y -= dy / self.camera.zoom
-            self.field_dirty = True
+        elif event.type == pygame.MOUSEMOTION:
+            if self.left_click_active:
+                self._continue_workspace_drag(event)
+            if self.is_panning:
+                dx, dy = event.rel
+                self.camera.offset_x -= dx / self.camera.zoom
+                self.camera.offset_y -= dy / self.camera.zoom
+                self.field_dirty = True
         elif event.type == pygame.KEYDOWN:
             if self.input_active or self.selected_input_active:
                 self._handle_input_key(event)
             elif event.key == pygame.K_DELETE:
                 self._delete_selected_object()
+            elif event.key == pygame.K_d and event.mod & (pygame.KMOD_CTRL | pygame.KMOD_META):
+                self._duplicate_selected_object()
             elif event.key == pygame.K_l:
                 self._cycle_field_line_mode()
             elif event.key == pygame.K_p:
@@ -122,6 +145,10 @@ class Scene2D(BaseScene):
                 self.field_dirty = True
             elif event.key == pygame.K_h:
                 self.show_help = not self.show_help
+            elif event.key == pygame.K_LEFTBRACKET:
+                self._change_vector_density(1)
+            elif event.key == pygame.K_RIGHTBRACKET:
+                self._change_vector_density(-1)
         return True
 
     def _handle_panel_click(self, position: Tuple[int, int]) -> None:
@@ -145,35 +172,129 @@ class Scene2D(BaseScene):
                 return
             current_y += option_height + option_spacing
 
-        input_rect = self._value_input_rect()
+        input_rect = self._value_input_rect(y_offset=current_y + 34)
         if input_rect.collidepoint((x, y)):
             self.input_active = True
             return
 
-        delete_rect = self._delete_button_rect()
+        y_cursor = input_rect.bottom + 24
+        if self.selected_object is not None:
+            y_cursor += 26  # space for "Objet sélectionné"
+            y_cursor += 20  # space for parameter label
+            selected_rect = self._selected_value_input_rect(y_offset=y_cursor)
+            if selected_rect.collidepoint((x, y)):
+                self.selected_input_active = True
+                return
+            y_cursor = selected_rect.bottom + 16
+
+        duplicate_rect = self._duplicate_button_rect(y_offset=y_cursor)
+        if duplicate_rect.collidepoint((x, y)) and self.selected_object is not None:
+            self._duplicate_selected_object()
+            return
+
+        delete_rect = self._delete_button_rect(y_offset=duplicate_rect.bottom + 10)
         if delete_rect.collidepoint((x, y)) and self.selected_object is not None:
             self._delete_selected_object()
             return
 
-        if self.selected_object is not None:
-            selected_rect = self._selected_value_input_rect()
-            if selected_rect.collidepoint((x, y)):
-                self.selected_input_active = True
+    def _start_workspace_left_click(self, position: Tuple[int, int]) -> None:
+        """Handle the start of a left click inside the workspace area."""
 
-    def _handle_workspace_click(self, position: Tuple[int, int]) -> None:
         self.input_active = False
         self.selected_input_active = False
-        world_pos = self._screen_to_world((position[0] - self.workspace_rect.left, position[1] - self.workspace_rect.top))
+        self.left_click_active = True
+        self.left_click_suppressed = False
+        self.drag_initial_mouse = position
 
-        if self._select_object_at(world_pos):
+        local = (position[0] - self.workspace_rect.left, position[1] - self.workspace_rect.top)
+        world_pos = self._screen_to_world(local)
+        hit = self._hit_test_object(world_pos)
+
+        if hit:
+            self.drag_candidate = hit
+            self.selected_object = hit
+            self.drag_start_world = world_pos
+            self.drag_initial_object_state = self._capture_object_state(hit)
+            self.is_dragging_object = False
             self.pending_start = None
             self._populate_selected_input()
+        else:
+            self.drag_candidate = None
+            self.drag_initial_object_state = None
+            self.drag_start_world = world_pos
+            self.is_dragging_object = False
+
+    def _continue_workspace_drag(self, event: pygame.event.Event) -> None:
+        """Update dragging state while the left button remains pressed."""
+
+        if not self.left_click_active or not self.drag_initial_mouse:
             return
+
+        dx = event.pos[0] - self.drag_initial_mouse[0]
+        dy = event.pos[1] - self.drag_initial_mouse[1]
+        distance = math.hypot(dx, dy)
+        drag_threshold = 5.0
+
+        if self.drag_candidate and self.drag_initial_object_state and self.drag_start_world:
+            if not self.is_dragging_object and distance > drag_threshold:
+                self.is_dragging_object = True
+            if self.is_dragging_object:
+                local = (
+                    event.pos[0] - self.workspace_rect.left,
+                    event.pos[1] - self.workspace_rect.top,
+                )
+                world_pos = self._screen_to_world(local)
+                delta = (
+                    world_pos[0] - self.drag_start_world[0],
+                    world_pos[1] - self.drag_start_world[1],
+                )
+                self._apply_object_translation(self.drag_candidate, delta)
+                self._mark_field_dirty()
+        else:
+            if not self.left_click_suppressed and distance > drag_threshold:
+                self.left_click_suppressed = True
+
+    def _finish_workspace_left_click(self, position: Tuple[int, int]) -> None:
+        """Finalize selection, creation or dragging when the left click ends."""
+
+        local = (
+            position[0] - self.workspace_rect.left,
+            position[1] - self.workspace_rect.top,
+        )
+        world_pos = self._screen_to_world(local)
+
+        if self.drag_candidate:
+            if self.is_dragging_object:
+                self._populate_selected_input()
+            else:
+                self.selected_object = self.drag_candidate
+                self.pending_start = None
+                self._populate_selected_input()
+            self.drag_candidate = None
+            self.drag_initial_object_state = None
+            self.drag_start_world = None
+            self.is_dragging_object = False
+        elif not self.left_click_suppressed:
+            self._handle_workspace_click_world(world_pos)
+
+        self.left_click_active = False
+        self.left_click_suppressed = False
+        self.drag_initial_mouse = None
+
+    def _handle_workspace_click_world(self, world_pos: Tuple[float, float]) -> None:
+        """Perform the workspace action associated with a simple click in the void."""
 
         if self.selected_type == "point":
             self._place_point_charge(world_pos)
         elif self.selected_type in {"line", "current"}:
             self._handle_segment_placement(world_pos)
+            if self.selected_object is None:
+                self._populate_selected_input()
+        else:
+            self.selected_object = None
+            self.selected_input_value = ""
+            self.selected_input_active = False
+            self._populate_selected_input()
 
     def _handle_segment_placement(self, position: Tuple[float, float]) -> None:
         if self.pending_start and self.pending_start[0] == self.selected_type:
@@ -270,32 +391,65 @@ class Scene2D(BaseScene):
             obj.current = new_value
         self._mark_field_dirty()
 
-    def _select_object_at(self, position: Tuple[float, float]) -> bool:
+    def _hit_test_object(self, position: Tuple[float, float]) -> Optional[Tuple[str, int]]:
+        """Return the top-most object located under ``position`` in world space."""
+
         threshold_point = self._charge_radius_world()
         threshold_line = self._line_selection_threshold_world()
 
-        # Charges
         for index, charge in enumerate(reversed(self.charges)):
             actual_index = len(self.charges) - 1 - index
             if self._point_within_radius(position, charge.position, threshold_point):
-                self.selected_object = ("charge", actual_index)
-                return True
+                return ("charge", actual_index)
 
-        # Line charges
         for index, line in enumerate(reversed(self.line_charges)):
             actual_index = len(self.line_charges) - 1 - index
             if self._point_near_segment(position, line.start, line.end, threshold_line):
-                self.selected_object = ("line", actual_index)
-                return True
+                return ("line", actual_index)
 
-        # Currents
         for index, wire in enumerate(reversed(self.currents)):
             actual_index = len(self.currents) - 1 - index
             if self._point_near_segment(position, wire.start, wire.end, threshold_line):
-                self.selected_object = ("current", actual_index)
-                return True
+                return ("current", actual_index)
 
+        return None
+
+    def _select_object_at(self, position: Tuple[float, float]) -> bool:
+        hit = self._hit_test_object(position)
+        if hit:
+            self.selected_object = hit
+            return True
         return False
+
+    def _capture_object_state(self, hit: Tuple[str, int]) -> Optional[Tuple[float, ...]]:
+        """Store the original coordinates of an object before it is dragged."""
+
+        obj = self._get_object(*hit)
+        if obj is None:
+            return None
+        if hit[0] == "charge":
+            return (obj.x, obj.y)
+        if hit[0] in {"line", "current"}:
+            return (obj.x1, obj.y1, obj.x2, obj.y2)
+        return None
+
+    def _apply_object_translation(self, hit: Tuple[str, int], delta: Tuple[float, float]) -> None:
+        """Translate the object associated with ``hit`` by ``delta`` in world space."""
+
+        base_state = self.drag_initial_object_state
+        if base_state is None:
+            return
+        obj = self._get_object(*hit)
+        if obj is None:
+            return
+        if hit[0] == "charge" and len(base_state) >= 2:
+            obj.x = base_state[0] + delta[0]
+            obj.y = base_state[1] + delta[1]
+        elif hit[0] in {"line", "current"} and len(base_state) >= 4:
+            obj.x1 = base_state[0] + delta[0]
+            obj.y1 = base_state[1] + delta[1]
+            obj.x2 = base_state[2] + delta[0]
+            obj.y2 = base_state[3] + delta[1]
 
     def _handle_input_key(self, event: pygame.event.Event) -> None:
         target_value = self.selected_input_value if self.selected_input_active else self.input_value
@@ -354,6 +508,8 @@ class Scene2D(BaseScene):
         self._draw_hud()
 
     def _draw_field_visuals(self) -> None:
+        self._draw_vector_field_samples()
+
         if self.show_field_lines_mode in {"E", "both"}:
             color = (255, 220, 160)
             width = max(1, int(2 * self.camera.zoom))
@@ -380,6 +536,67 @@ class Scene2D(BaseScene):
                 start = self._round_point(self._world_to_screen(segment[0]))
                 end = self._round_point(self._world_to_screen(segment[1]))
                 pygame.draw.line(self.screen, color, start, end, 1)
+
+    def _draw_vector_field_samples(self) -> None:
+        arrow_min = 6.0
+        arrow_max = 34.0
+        width = max(1, int(self.camera.zoom * 1.2))
+
+        if self.field_vectors_E and self.max_vector_magnitude_E > 1e-6:
+            scale = arrow_max / self.max_vector_magnitude_E
+            self._draw_field_vector_set(self.field_vectors_E, (255, 210, 150), scale, arrow_min, arrow_max, width)
+
+        if self.field_vectors_B and self.max_vector_magnitude_B > 1e-6:
+            scale = arrow_max / self.max_vector_magnitude_B
+            self._draw_field_vector_set(self.field_vectors_B, (140, 230, 255), scale, arrow_min, arrow_max, width)
+
+    def _draw_field_vector_set(
+        self,
+        samples: Sequence[Tuple[Tuple[float, float], Tuple[float, float], float]],
+        color: Tuple[int, int, int],
+        scale: float,
+        arrow_min: float,
+        arrow_max: float,
+        width: int,
+    ) -> None:
+        for position, vector, magnitude in samples:
+            if magnitude <= 0:
+                continue
+            direction = (vector[0] / magnitude, vector[1] / magnitude)
+            length = magnitude * scale
+            length = max(arrow_min, min(arrow_max, length))
+            start = self._world_to_screen(position)
+            self._draw_arrow(start, direction, length, color, width)
+
+    def _draw_arrow(
+        self,
+        start: Tuple[float, float],
+        direction: Tuple[float, float],
+        length: float,
+        color: Tuple[int, int, int],
+        width: int,
+    ) -> None:
+        end = (start[0] + direction[0] * length, start[1] + direction[1] * length)
+        pygame.draw.line(
+            self.screen,
+            color,
+            self._round_point(start),
+            self._round_point(end),
+            max(1, width),
+        )
+
+        head_length = max(4.0, min(length * 0.4, 16.0 + self.camera.zoom * 1.5))
+        perp = (-direction[1], direction[0])
+        left = (
+            end[0] - direction[0] * head_length + perp[0] * head_length * 0.5,
+            end[1] - direction[1] * head_length + perp[1] * head_length * 0.5,
+        )
+        right = (
+            end[0] - direction[0] * head_length - perp[0] * head_length * 0.5,
+            end[1] - direction[1] * head_length - perp[1] * head_length * 0.5,
+        )
+        pygame.draw.line(self.screen, color, self._round_point(end), self._round_point(left), max(1, width))
+        pygame.draw.line(self.screen, color, self._round_point(end), self._round_point(right), max(1, width))
 
     def _draw_pending_segment_preview(self) -> None:
         if not self.pending_start or self.pending_start[0] != self.selected_type:
@@ -451,6 +668,15 @@ class Scene2D(BaseScene):
         self.field_lines_E = []
         self.field_lines_B = []
         self.potential_contours = []
+        self.field_vectors_E = []
+        self.field_vectors_B = []
+        self.max_vector_magnitude_E = 0.0
+        self.max_vector_magnitude_B = 0.0
+
+        if self.charges or self.line_charges:
+            self.field_vectors_E, self.max_vector_magnitude_E = self._sample_field_vectors(bounds, "E")
+        if self.currents:
+            self.field_vectors_B, self.max_vector_magnitude_B = self._sample_field_vectors(bounds, "B")
 
         if self.show_field_lines_mode in {"E", "both"} and self.charges:
             self.field_lines_E = self._generate_e_field_lines(bounds)
@@ -503,6 +729,44 @@ class Scene2D(BaseScene):
                     if len(line) > 1:
                         lines.append(line)
         return lines
+
+    def _sample_field_vectors(
+        self, bounds: Tuple[float, float, float, float], field_kind: str
+    ) -> Tuple[List[Tuple[Tuple[float, float], Tuple[float, float], float]], float]:
+        spacing = self._vector_field_spacing_world()
+        if spacing <= 0:
+            return [], 0.0
+
+        x_min, y_min, x_max, y_max = bounds
+        start_x = math.floor(x_min / spacing) * spacing
+        start_y = math.floor(y_min / spacing) * spacing
+
+        samples: List[Tuple[Tuple[float, float], Tuple[float, float], float]] = []
+        max_magnitude = 0.0
+
+        x = start_x
+        while x <= x_max:
+            y = start_y
+            while y <= y_max:
+                if field_kind == "E":
+                    vec = compute_E_at_point((x, y), self.charges, self.line_charges)
+                else:
+                    vec = compute_B_at_point((x, y), self.currents)
+                magnitude = compute_field_magnitude(vec)
+                if magnitude > 1e-5:
+                    samples.append(((x, y), vec, magnitude))
+                    if magnitude > max_magnitude:
+                        max_magnitude = magnitude
+                y += spacing
+            x += spacing
+
+        return samples, max_magnitude
+
+    def _vector_field_spacing_world(self) -> float:
+        base_spacing_px = 90.0
+        spacing_world = base_spacing_px / max(self.camera.zoom, 0.05)
+        spacing_world = max(12.0, spacing_world)
+        return spacing_world * max(1, self.vector_field_skip)
 
     def _generate_potential_contours(
         self, bounds: Tuple[float, float, float, float]
@@ -651,6 +915,13 @@ class Scene2D(BaseScene):
             self.screen.blit(selected_surface, selected_rect_text)
             y_cursor = selected_rect.bottom + 16
 
+        duplicate_rect = self._duplicate_button_rect(y_offset=y_cursor)
+        duplicate_color = (96, 132, 220) if self.selected_object else (60, 80, 120)
+        pygame.draw.rect(self.screen, duplicate_color, duplicate_rect, border_radius=8)
+        duplicate_label = self.small_font.render("Dupliquer sélection", True, (235, 240, 255))
+        self.screen.blit(duplicate_label, duplicate_label.get_rect(center=duplicate_rect.center))
+        y_cursor = duplicate_rect.bottom + 10
+
         delete_rect = self._delete_button_rect(y_offset=y_cursor)
         button_color = (150, 70, 80) if self.selected_object else (90, 50, 60)
         pygame.draw.rect(self.screen, button_color, delete_rect, border_radius=8)
@@ -672,12 +943,14 @@ class Scene2D(BaseScene):
         y_cursor += 32
 
         instructions = [
-            "Clic gauche : sélectionner / créer",
+            "Clic gauche : sélectionner / déplacer / créer",
             "Clic droit + glisser : déplacer la vue",
             "Molette : zoom",
             "Touche L : cycle lignes de champ",
             "Touche P : afficher équipotentielles",
+            "Ctrl + D : dupliquer la sélection",
             "Suppr : supprimer la sélection",
+            "[ / ] : densité des flèches du champ",
             "Touche H : aide",
             "Échap : retour au menu",
         ]
@@ -705,6 +978,31 @@ class Scene2D(BaseScene):
                 hud_lines.append(f"V={potential:.3f}")
         else:
             hud_lines.append("Curseur hors de la scène")
+
+        selection_line = "Sélection : aucune"
+        if self.selected_object:
+            obj = self._get_object(*self.selected_object)
+            if obj is not None:
+                kind, _ = self.selected_object
+                if kind == "charge":
+                    selection_line = (
+                        f"Charge q={obj.q:.2f} @ ({obj.x:.1f}, {obj.y:.1f})"
+                    )
+                elif kind == "line":
+                    selection_line = (
+                        f"Ligne λ={obj.linear_density:.2f}"
+                        f" de ({obj.x1:.1f},{obj.y1:.1f}) à ({obj.x2:.1f},{obj.y2:.1f})"
+                    )
+                elif kind == "current":
+                    selection_line = (
+                        f"Fil I={obj.current:.2f}"
+                        f" de ({obj.x1:.1f},{obj.y1:.1f}) à ({obj.x2:.1f},{obj.y2:.1f})"
+                    )
+        hud_lines.append(" ")
+        hud_lines.append(selection_line)
+        hud_lines.append("Ctrl+D / bouton : dupliquer • Suppr / bouton : supprimer")
+        hud_lines.append("Clic g. : sélectionner ou déplacer • Clic d. + glisser : vue")
+        hud_lines.append("Molette : zoom • [ / ] : densité des flèches")
 
         if hud_lines:
             surfaces = [self.tiny_font.render(line, True, (230, 235, 245)) for line in hud_lines]
@@ -760,9 +1058,14 @@ class Scene2D(BaseScene):
             y_offset = self.panel_rect.top + 240
         return pygame.Rect(self.panel_rect.left + 16, y_offset, self.panel_rect.width - 32, 42)
 
+    def _duplicate_button_rect(self, y_offset: Optional[int] = None) -> pygame.Rect:
+        if y_offset is None:
+            y_offset = self.panel_rect.top + 280
+        return pygame.Rect(self.panel_rect.left + 16, y_offset, self.panel_rect.width - 32, 44)
+
     def _delete_button_rect(self, y_offset: Optional[int] = None) -> pygame.Rect:
         if y_offset is None:
-            y_offset = self.panel_rect.top + 320
+            y_offset = self.panel_rect.top + 332
         return pygame.Rect(self.panel_rect.left + 16, y_offset, self.panel_rect.width - 32, 44)
 
     def _selected_value_input_rect(self, y_offset: Optional[int] = None) -> pygame.Rect:
@@ -775,6 +1078,15 @@ class Scene2D(BaseScene):
         screen_pos = self._world_to_screen(charge.position)
         radius_world = self._charge_radius_world() * (1.1 if selected else 1.0)
         radius = max(2, int(radius_world * self.camera.zoom))
+        if selected:
+            halo_radius = radius + max(2, int(6 * self.camera.zoom))
+            pygame.draw.circle(
+                self.screen,
+                (255, 255, 200),
+                self._round_point(screen_pos),
+                halo_radius,
+                2,
+            )
         pygame.draw.circle(self.screen, color, self._round_point(screen_pos), radius)
         pygame.draw.circle(self.screen, (250, 250, 255), self._round_point(screen_pos), radius, 2)
         value_surface = self.tiny_font.render(f"q={charge.q:.2f}", True, (230, 230, 240))
@@ -788,6 +1100,9 @@ class Scene2D(BaseScene):
         width = max(1, int((4 if selected else 3) * self.camera.zoom))
         start_screen = self._round_point(self._world_to_screen(line.start))
         end_screen = self._round_point(self._world_to_screen(line.end))
+        if selected:
+            glow_width = max(1, width + 4)
+            pygame.draw.line(self.screen, (255, 245, 170), start_screen, end_screen, glow_width)
         pygame.draw.line(self.screen, color, start_screen, end_screen, width)
         mid_world = ((line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)
         mid_screen = self._world_to_screen(mid_world)
@@ -802,6 +1117,9 @@ class Scene2D(BaseScene):
         width = max(1, int((4 if selected else 3) * self.camera.zoom))
         start_screen = self._round_point(self._world_to_screen(wire.start))
         end_screen = self._round_point(self._world_to_screen(wire.end))
+        if selected:
+            glow_width = max(1, width + 4)
+            pygame.draw.line(self.screen, (190, 255, 190), start_screen, end_screen, glow_width)
         pygame.draw.line(self.screen, color, start_screen, end_screen, width)
         mid_world = ((wire.x1 + wire.x2) / 2, (wire.y1 + wire.y2) / 2)
         mid_screen = self._world_to_screen(mid_world)
@@ -860,6 +1178,48 @@ class Scene2D(BaseScene):
         self.selected_object = None
         self.selected_input_value = ""
         self.selected_input_active = False
+        self._populate_selected_input()
+        self._mark_field_dirty()
+
+    def _duplicate_selected_object(self) -> None:
+        if not self.selected_object:
+            return
+        obj = self._get_object(*self.selected_object)
+        if obj is None:
+            return
+
+        offset = 40.0
+        kind, _ = self.selected_object
+        if kind == "charge":
+            duplicate = PointCharge(obj.x, obj.y - offset, obj.q)
+            self.charges.append(duplicate)
+            self.selected_object = ("charge", len(self.charges) - 1)
+        elif kind == "line":
+            duplicate = LineCharge(
+                obj.x1,
+                obj.y1 - offset,
+                obj.x2,
+                obj.y2 - offset,
+                obj.linear_density,
+            )
+            self.line_charges.append(duplicate)
+            self.selected_object = ("line", len(self.line_charges) - 1)
+        elif kind == "current":
+            duplicate = CurrentWire(
+                obj.x1,
+                obj.y1 - offset,
+                obj.x2,
+                obj.y2 - offset,
+                obj.current,
+            )
+            self.currents.append(duplicate)
+            self.selected_object = ("current", len(self.currents) - 1)
+        else:
+            return
+
+        self.pending_start = None
+        self.selected_input_active = False
+        self._populate_selected_input()
         self._mark_field_dirty()
 
     def _get_object(self, kind: str, index: int):
@@ -873,6 +1233,14 @@ class Scene2D(BaseScene):
 
     def _mark_field_dirty(self) -> None:
         self.field_dirty = True
+
+    def _change_vector_density(self, delta: int) -> None:
+        """Increase or decrease the density of sampled arrows on the grid."""
+
+        new_skip = max(1, min(6, self.vector_field_skip + delta))
+        if new_skip != self.vector_field_skip:
+            self.vector_field_skip = new_skip
+            self._mark_field_dirty()
 
     @staticmethod
     def _charge_radius_world() -> float:
