@@ -46,6 +46,7 @@ class Scene2D(BaseScene):
         self.workspace_rect = pygame.Rect(0, 0, width - self.panel_width, height)
 
         self.camera = Camera2D()
+        self._configure_initial_camera()
         self.is_panning = False
 
         self.charges: List[PointCharge] = []
@@ -94,6 +95,16 @@ class Scene2D(BaseScene):
         self.field_vectors_B: List[Tuple[Tuple[float, float], Tuple[float, float], float]] = []
         self.max_vector_magnitude_E = 0.0
         self.max_vector_magnitude_B = 0.0
+
+    def _configure_initial_camera(self) -> None:
+        if self.workspace_rect.width <= 0 or self.workspace_rect.height <= 0:
+            return
+        desired_span_world = 12.0
+        zoom = self.workspace_rect.width / desired_span_world
+        zoom = max(Camera2D.MIN_ZOOM, min(zoom, Camera2D.MAX_ZOOM))
+        self.camera.zoom = zoom
+        self.camera.offset_x = - (self.workspace_rect.width / 2) / self.camera.zoom
+        self.camera.offset_y = - (self.workspace_rect.height / 2) / self.camera.zoom
 
     def _build_type_options(self) -> Sequence[_TypeOption]:
         if self.config.field_type == FieldType.ELECTROSTATIC:
@@ -220,6 +231,11 @@ class Scene2D(BaseScene):
             return
 
     def on_resize(self, size: tuple[int, int]) -> None:
+        prev_center_world: Optional[Tuple[float, float]] = None
+        if self.workspace_rect.width > 0 and self.workspace_rect.height > 0:
+            prev_center_world = self._screen_to_world(
+                (self.workspace_rect.width / 2, self.workspace_rect.height / 2)
+            )
         width, height = size
         panel_width = min(self.panel_width, max(220, width - 240)) if width > 480 else min(self.panel_width, width)
         panel_width = max(200, panel_width)
@@ -227,6 +243,9 @@ class Scene2D(BaseScene):
         self.panel_rect = pygame.Rect(width - panel_width, 0, panel_width, height)
         workspace_width = max(0, width - panel_width)
         self.workspace_rect = pygame.Rect(0, 0, workspace_width, height)
+        if prev_center_world and self.workspace_rect.width > 0 and self.workspace_rect.height > 0:
+            self.camera.offset_x = prev_center_world[0] - (self.workspace_rect.width / 2) / self.camera.zoom
+            self.camera.offset_y = prev_center_world[1] - (self.workspace_rect.height / 2) / self.camera.zoom
         self.field_toggle_rect = pygame.Rect(0, 0, 0, 0)
         self.potential_toggle_rect = pygame.Rect(0, 0, 0, 0)
         self.field_dirty = True
@@ -813,8 +832,10 @@ class Scene2D(BaseScene):
 
     def _vector_field_spacing_world(self) -> float:
         base_spacing_px = 90.0
-        spacing_world = base_spacing_px / max(self.camera.zoom, 0.05)
-        spacing_world = max(12.0, spacing_world)
+        zoom = max(self.camera.zoom, 0.05)
+        spacing_world = base_spacing_px / zoom
+        min_spacing_world = 12.0 / zoom
+        spacing_world = max(min_spacing_world, spacing_world)
         return spacing_world * max(1, self.vector_field_skip)
 
     def _generate_potential_contours(
@@ -908,7 +929,8 @@ class Scene2D(BaseScene):
         return points
 
     def _field_line_step_world(self) -> float:
-        return max(4.0, 30.0 / max(self.camera.zoom, 0.2))
+        zoom = max(self.camera.zoom, 0.2)
+        return max(0.12, 30.0 / zoom)
 
     def _near_e_source(self, point: Tuple[float, float]) -> bool:
         for charge in self.charges:
@@ -1211,7 +1233,8 @@ class Scene2D(BaseScene):
         radius_world = self._charge_radius_world() * (1.1 if selected else 1.0)
         radius = max(2, int(radius_world * self.camera.zoom))
         if selected:
-            halo_radius = radius + max(2, int(6 * self.camera.zoom))
+            thickness_scale = min(self.camera.zoom, 1.0)
+            halo_radius = radius + max(2, int(6 * thickness_scale))
             pygame.draw.circle(
                 self.screen,
                 (255, 255, 200),
@@ -1229,11 +1252,13 @@ class Scene2D(BaseScene):
 
     def _draw_line_charge(self, line: LineCharge, selected: bool) -> None:
         color = (240, 200, 80)
-        width = max(1, int((3 if selected else 2) * self.camera.zoom))
+        thickness_scale = min(self.camera.zoom, 1.0)
+        width = max(1, int((3 if selected else 2) * thickness_scale))
         start_screen = self._round_point(self._world_to_screen(line.start))
         end_screen = self._round_point(self._world_to_screen(line.end))
         if selected:
-            glow_width = max(1, width + 4)
+            glow_extra = max(2, int(4 * thickness_scale))
+            glow_width = max(1, width + glow_extra)
             pygame.draw.line(self.screen, (255, 245, 170), start_screen, end_screen, glow_width)
         pygame.draw.line(self.screen, color, start_screen, end_screen, width)
         mid_world = ((line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)
@@ -1246,11 +1271,13 @@ class Scene2D(BaseScene):
 
     def _draw_current_wire(self, wire: CurrentWire, selected: bool) -> None:
         color = (120, 230, 120)
-        width = max(1, int((3 if selected else 2) * self.camera.zoom))
+        thickness_scale = min(self.camera.zoom, 1.0)
+        width = max(1, int((3 if selected else 2) * thickness_scale))
         start_screen = self._round_point(self._world_to_screen(wire.start))
         end_screen = self._round_point(self._world_to_screen(wire.end))
         if selected:
-            glow_width = max(1, width + 4)
+            glow_extra = max(2, int(4 * thickness_scale))
+            glow_width = max(1, width + glow_extra)
             pygame.draw.line(self.screen, (190, 255, 190), start_screen, end_screen, glow_width)
         pygame.draw.line(self.screen, color, start_screen, end_screen, width)
         mid_world = ((wire.x1 + wire.x2) / 2, (wire.y1 + wire.y2) / 2)
@@ -1320,7 +1347,7 @@ class Scene2D(BaseScene):
         if obj is None:
             return
 
-        offset = 40.0
+        offset = 0.8
         kind, _ = self.selected_object
         if kind == "charge":
             duplicate = PointCharge(obj.x, obj.y - offset, obj.q)
@@ -1391,11 +1418,11 @@ class Scene2D(BaseScene):
 
     @staticmethod
     def _charge_radius_world() -> float:
-        return 12.0
+        return 0.24
 
     @staticmethod
     def _line_selection_threshold_world() -> float:
-        return 10.0
+        return 0.2
 
     @staticmethod
     def _normalize_vector(vec: Tuple[float, float]) -> Tuple[float, float]:
