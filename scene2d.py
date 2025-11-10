@@ -620,26 +620,45 @@ class Scene2D(BaseScene):
                 pygame.draw.line(self.screen, color, start, end, 1)
 
     def _draw_vector_field_samples(self) -> None:
-        arrow_min = 8.0
-        arrow_max = 36.0
-        width = max(1, int(self.camera.zoom * 0.9))
+        arrow_min = 5.0
+        arrow_max = 24.0
+        width = max(1, int(self.camera.zoom * 0.6))
 
         if self.field_vectors_E and self.max_vector_magnitude_E > 1e-6:
             scale = arrow_max / self.max_vector_magnitude_E
-            self._draw_field_vector_set(self.field_vectors_E, (255, 210, 150), scale, arrow_min, arrow_max, width)
+            palette = ((70, 80, 120), (255, 235, 210))
+            self._draw_field_vector_set(
+                self.field_vectors_E,
+                palette,
+                scale,
+                arrow_min,
+                arrow_max,
+                width,
+                self.max_vector_magnitude_E,
+            )
 
         if self.field_vectors_B and self.max_vector_magnitude_B > 1e-6:
             scale = arrow_max / self.max_vector_magnitude_B
-            self._draw_field_vector_set(self.field_vectors_B, (140, 230, 255), scale, arrow_min, arrow_max, width)
+            palette = ((60, 100, 140), (210, 250, 255))
+            self._draw_field_vector_set(
+                self.field_vectors_B,
+                palette,
+                scale,
+                arrow_min,
+                arrow_max,
+                width,
+                self.max_vector_magnitude_B,
+            )
 
     def _draw_field_vector_set(
         self,
         samples: Sequence[Tuple[Tuple[float, float], Tuple[float, float], float]],
-        color: Tuple[int, int, int],
+        palette: Tuple[Tuple[int, int, int], Tuple[int, int, int]],
         scale: float,
         arrow_min: float,
         arrow_max: float,
         width: int,
+        max_magnitude: float,
     ) -> None:
         for position, vector, magnitude in samples:
             if magnitude <= 0:
@@ -648,6 +667,8 @@ class Scene2D(BaseScene):
             length = magnitude * scale
             length = max(arrow_min, min(arrow_max, length))
             start = self._world_to_screen(position)
+            intensity = min(1.0, magnitude / max_magnitude if max_magnitude > 0 else 0.0)
+            color = self._interpolate_color(palette[0], palette[1], intensity)
             self._draw_arrow(start, direction, length, color, width)
 
     def _draw_arrow(
@@ -667,7 +688,7 @@ class Scene2D(BaseScene):
             max(1, width),
         )
 
-        head_length = max(5.0, min(length * 0.4, 18.0 + self.camera.zoom * 1.2))
+        head_length = max(4.0, min(length * 0.35, 12.0 + self.camera.zoom))
         perp = (-direction[1], direction[0])
         left = (
             end[0] - direction[0] * head_length + perp[0] * head_length * 0.35,
@@ -831,10 +852,10 @@ class Scene2D(BaseScene):
         return samples, max_magnitude
 
     def _vector_field_spacing_world(self) -> float:
-        base_spacing_px = 90.0
+        base_spacing_px = 52.0
         zoom = max(self.camera.zoom, 0.05)
         spacing_world = base_spacing_px / zoom
-        min_spacing_world = 12.0 / zoom
+        min_spacing_world = 8.0 / zoom
         spacing_world = max(min_spacing_world, spacing_world)
         return spacing_world * max(1, self.vector_field_skip)
 
@@ -1242,11 +1263,16 @@ class Scene2D(BaseScene):
                 halo_radius,
                 2,
             )
-        pygame.draw.circle(self.screen, color, self._round_point(screen_pos), radius)
-        pygame.draw.circle(self.screen, (250, 250, 255), self._round_point(screen_pos), radius, 2)
+        gradient = self._create_radial_gradient(color, radius)
+        if gradient is not None:
+            rect = gradient.get_rect(center=self._round_point(screen_pos))
+            self.screen.blit(gradient, rect)
+        else:
+            pygame.draw.circle(self.screen, color, self._round_point(screen_pos), radius)
+        pygame.draw.circle(self.screen, (250, 250, 255), self._round_point(screen_pos), radius, 1)
         value_surface = self.tiny_font.render(f"q={charge.q:.2f}", True, (230, 230, 240))
         text_rect = value_surface.get_rect(
-            center=(int(screen_pos[0]), int(screen_pos[1] + radius + 14))
+            center=(int(screen_pos[0]), int(screen_pos[1] + radius + 10))
         )
         self.screen.blit(value_surface, text_rect)
 
@@ -1418,7 +1444,34 @@ class Scene2D(BaseScene):
 
     @staticmethod
     def _charge_radius_world() -> float:
-        return 0.24
+        return 0.12
+
+    @staticmethod
+    def _interpolate_color(
+        start: Tuple[int, int, int], end: Tuple[int, int, int], factor: float
+    ) -> Tuple[int, int, int]:
+        factor = max(0.0, min(1.0, factor))
+        return (
+            int(start[0] + (end[0] - start[0]) * factor),
+            int(start[1] + (end[1] - start[1]) * factor),
+            int(start[2] + (end[2] - start[2]) * factor),
+        )
+
+    @staticmethod
+    def _create_radial_gradient(
+        color: Tuple[int, int, int], radius: int
+    ) -> Optional[pygame.Surface]:
+        if radius <= 0:
+            return None
+        size = radius * 4
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        center = size // 2
+        for r in range(radius, 0, -1):
+            factor = r / max(1, radius)
+            tint = Scene2D._interpolate_color(color, (255, 255, 255), 1.0 - factor * 0.6)
+            alpha = int(220 * (factor ** 1.4))
+            pygame.draw.circle(surface, (*tint, alpha), (center, center), r)
+        return surface
 
     @staticmethod
     def _line_selection_threshold_world() -> float:
