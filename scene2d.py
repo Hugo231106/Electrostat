@@ -620,9 +620,9 @@ class Scene2D(BaseScene):
                 pygame.draw.line(self.screen, color, start, end, 1)
 
     def _draw_vector_field_samples(self) -> None:
-        arrow_min = 10.0
-        arrow_max = 48.0
-        width = max(1, int(self.camera.zoom * 1.2))
+        arrow_min = 8.0
+        arrow_max = 36.0
+        width = max(1, int(self.camera.zoom * 0.9))
 
         if self.field_vectors_E and self.max_vector_magnitude_E > 1e-6:
             scale = arrow_max / self.max_vector_magnitude_E
@@ -667,15 +667,15 @@ class Scene2D(BaseScene):
             max(1, width),
         )
 
-        head_length = max(6.0, min(length * 0.45, 24.0 + self.camera.zoom * 1.8))
+        head_length = max(5.0, min(length * 0.4, 18.0 + self.camera.zoom * 1.2))
         perp = (-direction[1], direction[0])
         left = (
-            end[0] - direction[0] * head_length + perp[0] * head_length * 0.5,
-            end[1] - direction[1] * head_length + perp[1] * head_length * 0.5,
+            end[0] - direction[0] * head_length + perp[0] * head_length * 0.35,
+            end[1] - direction[1] * head_length + perp[1] * head_length * 0.35,
         )
         right = (
-            end[0] - direction[0] * head_length - perp[0] * head_length * 0.5,
-            end[1] - direction[1] * head_length - perp[1] * head_length * 0.5,
+            end[0] - direction[0] * head_length - perp[0] * head_length * 0.35,
+            end[1] - direction[1] * head_length - perp[1] * head_length * 0.35,
         )
         pygame.draw.line(self.screen, color, self._round_point(end), self._round_point(left), max(1, width))
         pygame.draw.line(self.screen, color, self._round_point(end), self._round_point(right), max(1, width))
